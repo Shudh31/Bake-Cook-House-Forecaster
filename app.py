@@ -15,7 +15,12 @@ st.write("Enter target date and recent demand inputs to generate instant **Go / 
 @st.cache_resource
 def load_model():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(BASE_DIR, 'bakery_model.pkl')
+    
+    # Check for primary or alternate file names
+    model_path = os.path.join(BASE_DIR, 'bakery_forecasting_model.pkl')
+    if not os.path.exists(model_path):
+        model_path = os.path.join(BASE_DIR, 'bakery_model.pkl')
+        
     return joblib.load(model_path)
 
 try:
@@ -24,8 +29,8 @@ try:
     feature_cols = artifact['feature_cols']
     threshold = artifact['threshold']
 except Exception as e:
-    st.error(f"Error loading model file ('bakery_model.pkl'): {e}")
-    st.info("Ensure 'bakery_model.pkl' is uploaded directly to the root of your GitHub repository.")
+    st.error(f"Error loading model file: {e}")
+    st.info("Ensure 'bakery_forecasting_model.pkl' or 'bakery_model.pkl' is uploaded directly to the root of your GitHub repository.")
     st.stop()
 
 # --- CAKE MENU CONFIGURATION ---
@@ -68,23 +73,27 @@ if st.button("🚀 Generate Baking Decision Schedule", type="primary", use_conta
     rows = []
     
     for cake_name, stats in cake_inputs.items():
-        row = {
-            'Price': stats['Price'],
-            'Day_of_Week': target_dt.dayofweek,
-            'Is_Weekend': 1 if target_dt.dayofweek in [5, 6] else 0,
-            'Is_Payday_Period': 1 if target_dt.day in [1, 2, 3, 4, 5, 28, 29, 30, 31] else 0,
-            'Sales_Last_7_Days': stats['Sales_Last_7_Days'],
-            'Same_Day_Last_Week': stats['Same_Day_Last_Week']
-        }
+        # 1. Initialize all feature columns to 0
+        row = {col: 0 for col in feature_cols}
         
-        # Match One-Hot Encoded features dynamically
+        # 2. Assign standard numerical and date features
+        row['Price'] = stats['Price']
+        row['Day_of_Week'] = target_dt.dayofweek
+        row['Is_Weekend'] = 1 if target_dt.dayofweek in [5, 6] else 0
+        row['Is_Payday_Period'] = 1 if target_dt.day in [1, 2, 3, 4, 5, 28, 29, 30, 31] else 0
+        row['Sales_Last_7_Days'] = stats['Sales_Last_7_Days']
+        row['Same_Day_Last_Week'] = stats['Same_Day_Last_Week']
+        
+        # 3. Match and set the One-Hot Encoded item column to 1
         for col in feature_cols:
             if col.startswith('Item_Name_'):
-                clean_col_item = col.replace('Item_Name_', '').strip()
-                row[col] = 1 if clean_col_item == cake_name else 0
+                clean_col_item = col.replace('Item_Name_', '').strip().lower()
+                if clean_col_item == cake_name.strip().lower():
+                    row[col] = 1
                 
         rows.append((cake_name, row))
         
+    # Build exact matching dataframe for Scikit-Learn model
     input_df = pd.DataFrame([r[1] for r in rows])[feature_cols]
     probabilities = model.predict_proba(input_df)[:, 1]
     
