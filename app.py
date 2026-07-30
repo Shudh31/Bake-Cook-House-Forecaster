@@ -2,25 +2,33 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import os
 from datetime import date, timedelta
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Bakery Daily Prep Forecaster", page_icon="🍰", layout="centered")
+st.set_page_config(page_title="Bakery Prep Decision Engine", page_icon="🍰", layout="centered")
 
-st.title("🍰 Daily Bakery Prep Forecaster")
-st.write("Select tomorrow's date and enter the last 7 days of sales to generate your baking schedule.")
+st.title("🍰 Bakery Prep Decision Engine")
+st.write("Enter target date and recent demand inputs to generate instant **Go / No-Go** baking recommendations.")
 
-# --- LOAD TRAINED MODEL ---
+# --- LOAD TRAINED MODEL ARTIFACT (ROBUST PATH RESOLUTION) ---
 @st.cache_resource
 def load_model():
-    return joblib.load('bakery_model.pkl')
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(BASE_DIR, 'bakery_model.pkl')
+    return joblib.load(model_path)
 
-artifact = load_model()
-model = artifact['model']
-feature_cols = artifact['feature_cols']
-threshold = artifact['threshold']
+try:
+    artifact = load_model()
+    model = artifact['model']
+    feature_cols = artifact['feature_cols']
+    threshold = artifact['threshold']
+except Exception as e:
+    st.error(f"Error loading model file ('bakery_model.pkl'): {e}")
+    st.info("Ensure 'bakery_model.pkl' is uploaded directly to the root of your GitHub repository.")
+    st.stop()
 
-# --- CAKE CONFIGURATION ---
+# --- CAKE MENU CONFIGURATION ---
 CAKE_MENU = {
     'Fresh Fruit Cake':       {'Price': 700.00},
     'Rasmalai Cake':          {'Price': 750.00},
@@ -30,21 +38,21 @@ CAKE_MENU = {
 }
 
 # --- INPUT FORM ---
-st.subheader("1. Date Selection")
-target_date = st.date_input("Target Date for Forecast", value=date.today() + timedelta(days=1))
+st.subheader("1. Select Forecast Date")
+target_date = st.date_input("Target Date", value=date.today() + timedelta(days=1))
 
-st.subheader("2. Recent Demand Signals")
-st.caption("Enter the total units sold in the last 7 days for each cake:")
+st.subheader("2. Enter Recent Demand Inputs")
+st.caption("Provide total units sold in the last 7 days and indicate if the item was sold exactly 7 days ago:")
 
 cake_inputs = {}
 for cake_name, details in CAKE_MENU.items():
     col1, col2, col3 = st.columns([3, 2, 2])
     with col1:
-        st.write(f"**{cake_name}** (₹{details['Price']:.0f})")
+        st.write(f"**{cake_name}**  \n:gray[₹{details['Price']:.0f}]")
     with col2:
-        sales_7d = st.number_input(f"Sales 7 Days", min_value=0, max_value=20, value=0, key=f"{cake_name}_7d")
+        sales_7d = st.number_input("Sales (Last 7 Days)", min_value=0, max_value=20, value=0, key=f"{cake_name}_7d")
     with col3:
-        same_day = st.selectbox(f"Sold 7 Days Ago?", options=[0, 1], format_func=lambda x: "Yes (1)" if x == 1 else "No (0)", key=f"{cake_name}_sd")
+        same_day = st.selectbox("Sold 7 Days Ago?", options=[0, 1], format_func=lambda x: "Yes" if x == 1 else "No", key=f"{cake_name}_sd")
     
     cake_inputs[cake_name] = {
         'Price': details['Price'],
@@ -52,8 +60,10 @@ for cake_name, details in CAKE_MENU.items():
         'Same_Day_Last_Week': same_day
     }
 
-# --- PREDICTION LOGIC ---
-if st.button("🚀 Generate Baking Schedule", type="primary"):
+st.divider()
+
+# --- PREDICTION ENGINE LOGIC ---
+if st.button("🚀 Generate Baking Decision Schedule", type="primary", use_container_width=True):
     target_dt = pd.to_datetime(target_date)
     rows = []
     
@@ -67,7 +77,7 @@ if st.button("🚀 Generate Baking Schedule", type="primary"):
             'Same_Day_Last_Week': stats['Same_Day_Last_Week']
         }
         
-        # Match One-Hot Encoded features
+        # Match One-Hot Encoded features dynamically
         for col in feature_cols:
             if col.startswith('Item_Name_'):
                 clean_col_item = col.replace('Item_Name_', '').strip()
@@ -80,19 +90,38 @@ if st.button("🚀 Generate Baking Schedule", type="primary"):
     
     # Format Results
     results = []
+    go_count = 0
+    
     for (cake_name, _), p in zip(rows, probabilities):
-        is_prep = p >= threshold
+        is_go = p >= threshold
+        if is_go:
+            go_count += 1
+            
         results.append({
             'Cake Item': cake_name,
             'Price': f"₹{CAKE_MENU[cake_name]['Price']:.0f}",
-            'Demand Probability': f"{p*100:.1f}%",
-            'Recommendation': "🟢 PREP / BAKE" if is_prep else "🔴 BAKE TO ORDER"
+            'Prob. Score (%)': f"{p*100:.1f}%",
+            'Go / No-Go Signal': "🟢 GO (Prep / Bake)" if is_go else "🔴 NO-GO (Bake to Order)"
         })
         
     results_df = pd.DataFrame(results)
     
-    st.divider()
-    st.subheader(f"📋 Prep Plan for {target_date.strftime('%A, %b %d, %Y')}")
+    # Executive Summary Metrics
+    st.subheader(f"📋 Prep Decision Schedule ({target_date.strftime('%A, %b %d, %Y')})")
     
-    # Custom colored metric output table
-    st.dataframe(results_df, use_container_width=True, hide_index=True)
+    m1, m2 = st.columns(2)
+    m1.metric("Total GO Signals (Prep Ahead)", f"{go_count} Cakes")
+    m2.metric("Total NO-GO Signals (Hold)", f"{len(CAKE_MENU) - go_count} Cakes")
+    
+    # Output Display Table
+    st.dataframe(
+        results_df, 
+        column_config={
+            "Cake Item": st.column_config.TextColumn("Cake Item"),
+            "Price": st.column_config.TextColumn("Price"),
+            "Prob. Score (%)": st.column_config.TextColumn("Prob. Score (%)"),
+            "Go / No-Go Signal": st.column_config.TextColumn("Go / No-Go Signal")
+        },
+        use_container_width=True, 
+        hide_index=True
+    )
