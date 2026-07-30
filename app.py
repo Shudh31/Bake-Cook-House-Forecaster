@@ -11,26 +11,23 @@ st.set_page_config(page_title="Bakery Prep Decision Engine", page_icon="🍰", l
 st.title("🍰 Bakery Prep Decision Engine")
 st.write("Enter target date and recent demand inputs to generate instant **Go / No-Go** baking recommendations.")
 
-# --- LOAD TRAINED MODEL ARTIFACT (ROBUST PATH RESOLUTION) ---
+# --- LOAD TRAINED MODEL ARTIFACT ---
 @st.cache_resource
 def load_model():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    
-    # Check for primary or alternate file names
-    model_path = os.path.join(BASE_DIR, 'bakery_forecasting_model.pkl')
+    model_path = os.path.join(BASE_DIR, 'bakery_model.pkl')
     if not os.path.exists(model_path):
-        model_path = os.path.join(BASE_DIR, 'bakery_model.pkl')
-        
+        model_path = os.path.join(BASE_DIR, 'bakery_forecasting_model.pkl')
     return joblib.load(model_path)
 
 try:
     artifact = load_model()
     model = artifact['model']
     feature_cols = artifact['feature_cols']
-    threshold = artifact['threshold']
+    threshold = artifact.get('threshold', 0.45)
 except Exception as e:
     st.error(f"Error loading model file: {e}")
-    st.info("Ensure 'bakery_forecasting_model.pkl' or 'bakery_model.pkl' is uploaded directly to the root of your GitHub repository.")
+    st.info("Ensure 'bakery_model.pkl' is uploaded directly to the root of your GitHub repository.")
     st.stop()
 
 # --- CAKE MENU CONFIGURATION ---
@@ -73,18 +70,17 @@ if st.button("🚀 Generate Baking Decision Schedule", type="primary", use_conta
     rows = []
     
     for cake_name, stats in cake_inputs.items():
-        # 1. Initialize all feature columns to 0
+        # Initialize feature schema
         row = {col: 0 for col in feature_cols}
         
-        # 2. Assign standard numerical and date features
-        row['Price'] = stats['Price']
-        row['Day_of_Week'] = target_dt.dayofweek
-        row['Is_Weekend'] = 1 if target_dt.dayofweek in [5, 6] else 0
-        row['Is_Payday_Period'] = 1 if target_dt.day in [1, 2, 3, 4, 5, 28, 29, 30, 31] else 0
-        row['Sales_Last_7_Days'] = stats['Sales_Last_7_Days']
-        row['Same_Day_Last_Week'] = stats['Same_Day_Last_Week']
+        # Populate features dynamically
+        if 'Price' in row: row['Price'] = stats['Price']
+        if 'Day_of_Week' in row: row['Day_of_Week'] = target_dt.dayofweek
+        if 'Is_Weekend' in row: row['Is_Weekend'] = 1 if target_dt.dayofweek in [5, 6] else 0
+        if 'Sales_Last_7_Days' in row: row['Sales_Last_7_Days'] = stats['Sales_Last_7_Days']
+        if 'Same_Day_Last_Week' in row: row['Same_Day_Last_Week'] = stats['Same_Day_Last_Week']
         
-        # 3. Match and set the One-Hot Encoded item column to 1
+        # One-Hot Encoding match
         for col in feature_cols:
             if col.startswith('Item_Name_'):
                 clean_col_item = col.replace('Item_Name_', '').strip().lower()
@@ -93,23 +89,29 @@ if st.button("🚀 Generate Baking Decision Schedule", type="primary", use_conta
                 
         rows.append((cake_name, row))
         
-    # Build exact matching dataframe for Scikit-Learn model
     input_df = pd.DataFrame([r[1] for r in rows])[feature_cols]
-    probabilities = model.predict_proba(input_df)[:, 1]
+    raw_probabilities = model.predict_proba(input_df)[:, 1]
     
-    # Format Results
     results = []
     go_count = 0
     
-    for (cake_name, _), p in zip(rows, probabilities):
-        is_go = p >= threshold
+    for (cake_name, _), p in zip(rows, raw_probabilities):
+        stats = cake_inputs[cake_name]
+        
+        # 🛡️ OPERATIONAL GUARDRAIL: Dampen zero-demand items
+        if stats['Sales_Last_7_Days'] == 0 and stats['Same_Day_Last_Week'] == 0:
+            final_p = p * 0.35  # Apply 65% penalty for zero sales momentum
+        else:
+            final_p = p
+            
+        is_go = final_p >= threshold
         if is_go:
             go_count += 1
             
         results.append({
             'Cake Item': cake_name,
             'Price': f"₹{CAKE_MENU[cake_name]['Price']:.0f}",
-            'Prob. Score (%)': f"{p*100:.1f}%",
+            'Prob. Score (%)': f"{final_p*100:.1f}%",
             'Go / No-Go Signal': "🟢 GO (Prep / Bake)" if is_go else "🔴 NO-GO (Bake to Order)"
         })
         
