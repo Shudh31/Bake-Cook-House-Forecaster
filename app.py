@@ -6,11 +6,19 @@ import os
 from datetime import date, timedelta
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Bakery Prep Decision Engine", page_icon="🍰", layout="centered")
+# --- PAGE SETUP ---
+st.set_page_config(
+    page_title="Decision Engine | Bake & Cook House", 
+    page_icon="🧁", 
+    layout="centered"
+)
 
-st.title("🍰 Bakery Prep Decision Engine")
-st.write("Enter target date and recent demand inputs to generate instant **Go / No-Go** baking recommendations.")
+# Custom Header Branding
+st.title("🍰 Decision Engine")
+st.subheader("Bake & Cook House")
+st.caption("Powered by **Verostat** | Demand Forecasting & Kitchen Prep System")
 
+st.divider()
 # --- LOAD TRAINED MODEL ARTIFACT ---
 @st.cache_resource
 def load_model():
